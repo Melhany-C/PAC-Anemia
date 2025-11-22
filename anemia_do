@@ -1,0 +1,95 @@
+********** anemia_do.do **********
+* 1. iniciar
+clear all
+set more off
+
+* 2. cargar datos (ajusta la ruta si hace falta)
+import delimited "REC44.csv", clear
+save "REC44.dta", replace
+use "REC44.dta", clear
+
+* 3. quedarnos solo con las variables necesarias
+keep caseid hw2 hw3 hw57
+
+* 4. transformar variables numéricas (hw2 peso, hw3 talla)
+* caseid tiene caracteres no numéricos -> no destring. Solo destring para hw2 y hw3.
+capture noisily destring hw2 hw3, generate(peso_raw talla_raw)
+* Si destring falla, revisar caracteres no numéricos con:
+* list caseid hw2 hw3 if regexm(hw2, "[^0-9]") | regexm(hw3, "[^0-9]")
+
+* convertir a int (si ya generó peso_raw/talla_raw, las renombramos)
+capture confirm variable peso_raw
+if _rc==0 {
+    rename peso_raw peso
+}
+capture confirm variable talla_raw
+if _rc==0 {
+    rename talla_raw talla
+}
+
+* 5. HW57 es string (por eso el error type mismatch al usar keep if hw57 != 9)
+* Destring de hw57 a nueva variable numeric
+capture confirm variable hw57
+destring hw57, generate(nivel_anemia) force
+* force convierte caracteres no-números a missing; revisa cuántos missing
+count if missing(nivel_anemia)
+di "Observaciones con nivel_anemia missing: " r(N)
+
+* 6. recodificar: 9 = no responde / missing en tu encuesta -> eliminamos
+* Asegurarnos que 9 represente no válido (según tu log)
+count if nivel_anemia==9
+di "Observaciones con codigo 9 en HW57: " r(N)
+
+* eliminar los 9 y los missing
+keep if !missing(nivel_anemia) & nivel_anemia != 9
+
+* 7. crear indicador binario: (1-3) = con anemia, 4 = sin anemia
+recode nivel_anemia (1/3 = 1) (4 = 0), gen(nivel_anemia_bin)
+label define binario 0 "sin anemia" 1 "con anemia"
+label values nivel_anemia_bin binario
+
+* 8. checks rápidos
+tab nivel_anemia
+tab nivel_anemia_bin
+summarize peso talla nivel_anemia_bin
+tabstat peso talla, by(nivel_anemia_bin) statistics(mean sd n)
+
+* 9. análisis de ejemplo (pruebas)
+* proporción con IC al 95%:
+proportion nivel_anemia_bin, level(95)
+
+* prueba de diferencia de medias peso/talla por anemia (t-test)
+ttest peso, by(nivel_anemia_bin)
+ttest talla, by(nivel_anemia_bin)
+
+* modelo simple (ejemplo): regresión de peso en talla y anemia
+regress peso talla nivel_anemia_bin
+estimates store modelo_anemia_simple
+
+* 10. detectar y quitar outliers (opcional)
+summarize peso, detail
+return list
+local p1 = r(p1)
+local p99 = r(p99)
+gen outlier_peso = (peso < `p1' | peso > `p99')
+summarize talla, detail
+local t1 = r(p1)
+local t99 = r(p99)
+gen outlier_talla = (talla < `t1' | talla > `t99')
+tab outlier_peso
+tab outlier_talla
+* si quieres eliminar:
+* drop if outlier_peso==1 | outlier_talla==1
+
+* 11. guardar dataset procesado
+save "anemia_clean.dta", replace
+
+* 12. guardar outputs (log)
+log using "anemia_output.log", replace
+tab nivel_anemia_bin
+proportion nivel_anemia_bin
+regress peso talla nivel_anemia_bin
+log close
+
+exit
+**********************************
